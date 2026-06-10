@@ -20,6 +20,9 @@ sass:
   sass_dir: _sass
   style: :compressed
 
+jekyll_compose:
+  auto_open: true
+
 author:
   name: Prem Sichanugrist
 
