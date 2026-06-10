@@ -13,6 +13,7 @@ exclude:
   - LICENSE-CC-BY-NC
   - LICENSE-MIT
   - README.md
+  - bin
 
 sass:
   sass_dir: _sass
