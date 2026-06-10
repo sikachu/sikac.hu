@@ -1,0 +1,28 @@
+title: "@sikac.hu"
+url: https://sikac.hu
+paginate: 1
+baseurl: ""
+permalink: pretty
+
+plugins:
+  - jekyll-gist
+  - jekyll-paginate
+  - jekyll-seo-tag
+
+exclude:
+  - LICENSE-CC-BY-NC
+  - LICENSE-MIT
+  - README.md
+
+sass:
+  sass_dir: _sass
+  style: :compressed
+
+author:
+  name: Prem Sichanugrist
+
+nav:
+  - title: archive
+    url: /archive
+  - title: about
+    url: /about
