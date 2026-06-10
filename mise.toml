@@ -1,0 +1,5 @@
+[tools]
+ruby = "ruby"
+
+[env]
+_.path = "./bin"

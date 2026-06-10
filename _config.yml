@@ -14,6 +14,7 @@ exclude:
   - LICENSE-MIT
   - README.md
   - bin
+  - mise.toml
 
 sass:
   sass_dir: _sass
