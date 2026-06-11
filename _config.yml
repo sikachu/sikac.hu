@@ -23,6 +23,11 @@ sass:
 jekyll_compose:
   auto_open: true
 
+collections:
+  pages:
+    output: true
+    permalink: /:slug
+
 author:
   name: Prem Sichanugrist
 
