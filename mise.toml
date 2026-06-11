@@ -3,3 +3,8 @@ ruby = "ruby"
 
 [env]
 _.path = "./bin"
+
+[shell_alias]
+j = "bin/jekyll"
+jb = "bin/jekyll build"
+js = "bin/jekyll serve"
