@@ -7,3 +7,22 @@ layout: default
   <time datetime="{{ page.date | date_to_xmlschema }}" class="post-date">{{ page.date | date_to_string: "ordinal", "US" }}</time>
   {{ content }}
 </article>
+
+<div class="pagination">
+  {% if page.previous %}
+    <a class="pagination-item older" href="{{ page.previous.url | relative_url }}">
+      <span class="pagination-label">&laquo; Previous</span>
+      <span class="pagination-title">{{ page.previous.title }}</span>
+    </a>
+  {% else %}
+    <span class="pagination-item older"></span>
+  {% endif %}
+  {% if page.next %}
+    <a class="pagination-item newer" href="{{ page.next.url | relative_url }}">
+      <span class="pagination-label">Next &raquo;</span>
+      <span class="pagination-title">{{ page.next.title }}</span>
+    </a>
+  {% else %}
+    <span class="pagination-item newer"></span>
+  {% endif %}
+</div>

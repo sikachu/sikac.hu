@@ -28,6 +28,29 @@ a.pagination-item:hover {
   background-color: var(--border-color);
 }
 
+.pagination-item.older {
+  text-align: left;
+}
+
+.pagination-item.newer {
+  text-align: right;
+}
+
+.pagination-label {
+  display: block;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  margin-bottom: 0.25rem;
+  color: var(--gray-600);
+}
+
+.pagination-title {
+  display: block;
+  font-size: 1rem;
+  font-weight: bold;
+  color: var(--heading-color);
+}
+
 @media (min-width: 30em) {
   .pagination {
     margin: var(--spacer-3) 0;
