@@ -11,6 +11,9 @@ plugins:
   - jekyll-seo-tag
 
 exclude:
+  - script
+  - .github
+  - .claude
   - LICENSE-CC-BY-NC
   - LICENSE-MIT
   - README.md

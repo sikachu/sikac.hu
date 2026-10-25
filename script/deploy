@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+set -euo pipefail
+set +x
+umask 077
+
+fail() { printf 'Deployment error: %s\n' "$*" >&2; exit 1; }
+
+repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_dir"
+[[ -s _site/index.html ]] || fail "Build _site/index.html before deploying; refusing an empty deployment."
+[[ -n ${TS_AUTHKEY:-} ]] || fail "Set the TS_AUTHKEY repository secret to the pre-signed, ephemeral deployment key."
+[[ -n ${DEPLOY_SSH_KEY:-} ]] || fail "The DEPLOY_SSH_KEY repository secret is missing."
+[[ -n ${DEPLOY_HOST:-} ]] || fail "The DEPLOY_HOST repository secret is missing."
+[[ -n ${DEPLOY_USER:-} ]] || fail "The DEPLOY_USER repository secret is missing."
+[[ -n ${DEPLOY_KNOWN_HOSTS:-} ]] || fail "The DEPLOY_KNOWN_HOSTS repository secret is missing."
+[[ $DEPLOY_HOST =~ ^[A-Za-z0-9_.:-]+$ ]] || fail "DEPLOY_HOST must contain only a hostname or IP address."
+[[ $DEPLOY_USER =~ ^[a-z_][a-z0-9_-]*$ ]] || fail "DEPLOY_USER is not a valid deployment account name."
+[[ ${DEPLOY_DRY_RUN:-1} == 0 || ${DEPLOY_DRY_RUN:-1} == 1 ]] || fail "DEPLOY_DRY_RUN must be 0 or 1."
+for tool in curl tar sha256sum ssh ssh-keygen rsync timeout; do
+  command -v "$tool" >/dev/null || fail "The runner needs $tool."
+done
+[[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || fail "This deployment is pinned to Linux amd64."
+
+state_dir=$(mktemp -d /tmp/site-deploy.XXXXXXXX)
+daemon_pid=
+cleanup() {
+  status=$?
+  trap - EXIT
+  if [[ -S $state_dir/tailscaled.sock ]]; then
+    if ! timeout 15 "$state_dir/tailscale/tailscale" --socket="$state_dir/tailscaled.sock" logout >/dev/null 2>&1; then
+      printf 'Deployment cleanup could not confirm device logout; check the CI device privately.\n' >&2
+      [[ $status != 0 ]] || status=1
+    fi
+  fi
+  if [[ -n $daemon_pid ]]; then
+    kill "$daemon_pid" 2>/dev/null || true
+    wait "$daemon_pid" 2>/dev/null || true
+  fi
+  rm -rf -- "$state_dir"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Pin both the release and its digest; do not execute an unverified installer.
+tailscale_version=1.104.2
+tailscale_sha256=512f613ed7d04fc7282f7dc5bd76aa105aae28168fbb9357eb749ebcbc29f0ae
+curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 2 \
+  --connect-timeout 10 --max-time 120 \
+  "https://pkgs.tailscale.com/stable/tailscale_${tailscale_version}_amd64.tgz" \
+  --output "$state_dir/tailscale.tgz"
+printf '%s  %s\n' "$tailscale_sha256" "$state_dir/tailscale.tgz" | sha256sum --check --status
+mkdir "$state_dir/tailscale" "$state_dir/state"
+tar -xzf "$state_dir/tailscale.tgz" --strip-components=1 -C "$state_dir/tailscale"
+printf '%s' "$TS_AUTHKEY" > "$state_dir/authkey"
+printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' > "$state_dir/deploy_key"
+printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$state_dir/known_hosts"
+ssh-keygen -l -f "$state_dir/known_hosts" >/dev/null 2>&1 || fail "Invalid trusted host-key entry."
+ssh-keygen -F deployment-target -f "$state_dir/known_hosts" >/dev/null 2>&1 || fail "The trusted host-key entry must use deployment-target."
+unset TS_AUTHKEY DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS
+
+# Userspace networking needs neither /dev/net/tun nor privileged container access.
+# Persist TKA data for this job so Tailnet Lock can validate peer signatures.
+"$state_dir/tailscale/tailscaled" --tun=userspace-networking \
+  --statedir="$state_dir/state" --socket="$state_dir/tailscaled.sock" \
+  > "$state_dir/tailscaled.log" 2>&1 &
+daemon_pid=$!
+for ((attempt=0; attempt<30; attempt++)); do
+  [[ -S $state_dir/tailscaled.sock ]] && break
+  kill -0 "$daemon_pid" 2>/dev/null || fail "The private-network client could not start."
+  sleep 1
+done
+[[ -S $state_dir/tailscaled.sock ]] || fail "The private-network client did not become ready."
+"$state_dir/tailscale/tailscale" --socket="$state_dir/tailscaled.sock" up \
+  --auth-key="file:$state_dir/authkey" \
+  --hostname="deployment-ci-${GITHUB_RUN_ID:-local}" \
+  --accept-dns=false --accept-routes=false --exit-node= --ssh=false --timeout=60s \
+  > "$state_dir/connect.log" 2>&1 || fail "Private-network authentication failed; review the CI auth key and Tailnet Lock privately."
+rm -f -- "$state_dir/authkey"
+
+# The public host key was obtained over an already trusted SSH connection.
+# Never discover-and-trust a host key inside the deployment job.
+cat > "$state_dir/ssh_config" <<EOF
+Host deployment-target
+  HostName "$DEPLOY_HOST"
+  User "$DEPLOY_USER"
+  IdentityFile "$state_dir/deploy_key"
+  IdentityAgent none
+  IdentitiesOnly yes
+  BatchMode yes
+  PasswordAuthentication no
+  KbdInteractiveAuthentication no
+  StrictHostKeyChecking yes
+  HostKeyAlias deployment-target
+  UserKnownHostsFile "$state_dir/known_hosts"
+  GlobalKnownHostsFile /dev/null
+  ConnectTimeout 15
+  ConnectionAttempts 1
+  ProxyCommand $state_dir/tailscale/tailscale --socket=$state_dir/tailscaled.sock nc %h %p
+EOF
+
+rsync_args=(-avz --delete --safe-links)
+if [[ ${DEPLOY_DRY_RUN:-1} == 1 ]]; then
+  rsync_args+=(--dry-run)
+  printf 'Checking deployment without changing website files.\n'
+fi
+# The server confines this key to its website directory; / is that restricted root.
+# Capture diagnostics privately: SSH and network errors can contain infrastructure identifiers.
+if ! timeout 180 rsync "${rsync_args[@]}" -e "ssh -F $state_dir/ssh_config" _site/ deployment-target:/ \
+  > "$state_dir/transfer.log" 2>&1; then
+  fail "Deployment transfer failed; verify the destination, restricted key, host identity, and policy privately."
+fi
+printf 'Deployment transfer completed (dry run: %s).\n' "${DEPLOY_DRY_RUN:-1}"

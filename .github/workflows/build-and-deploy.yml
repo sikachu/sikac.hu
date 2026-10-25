@@ -32,3 +32,56 @@ jobs:
         run: bin/jekyll build --destination _site
         env:
           JEKYLL_ENV: production
+
+  deploy:
+    needs: build
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      ((github.event_name == 'push' && vars.DEPLOYMENT_ENABLED == 'true') ||
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.dry_run || vars.DEPLOYMENT_ENABLED == 'true')))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: production
+    concurrency:
+      group: production-deployment
+      cancel-in-progress: false
+    env:
+      DEPLOY_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@12fd324f1d0b43274fdc8130f6980590a667c455 # v1.312.0
+        timeout-minutes: 15
+        with:
+          bundler-cache: true
+      - name: Build Jekyll site
+        run: bin/jekyll build --destination _site
+        env:
+          JEKYLL_ENV: production
+      - name: Ensure rsync is available
+        shell: bash
+        run: |
+          if ! command -v rsync >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends rsync
+          fi
+      - name: Deploy through private networking
+        shell: bash
+        run: bash script/deploy
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      - name: Purge Cloudflare cache
+        if: success() && env.DEPLOY_DRY_RUN == '0'
+        shell: bash
+        run: bash script/purge-cache
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
